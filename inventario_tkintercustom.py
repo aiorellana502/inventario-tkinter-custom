@@ -55,7 +55,7 @@ def agregar_producto(codebar, sku, marca, producto):
         c.execute('INSERT INTO productos VALUES (?,?,?,?)', (codebar, sku, marca, producto))
         conn.commit()
     except sqlite3.IntegrityError:
-        pass  # Ya existe
+        pass
     conn.close()
 
 def editar_producto(codebar, sku, marca, producto):
@@ -116,11 +116,11 @@ def eliminar_todos_los_datos(password):
     conn.close()
     return True
 
-def exportar_importaciones_excel(filas):
+def exportar_importaciones_excel(filas, parent=None):
     if not filas:
-        messagebox.showinfo("Sin datos", "No hay datos para exportar.")
+        messagebox.showinfo("Sin datos", "No hay datos para exportar.", parent=parent)
         return
-    archivo = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+    archivo = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")], parent=parent)
     if archivo:
         try:
             libro = openpyxl.Workbook()
@@ -130,9 +130,9 @@ def exportar_importaciones_excel(filas):
             for fila in filas:
                 hoja.append(fila)
             libro.save(archivo)
-            messagebox.showinfo("Éxito", "Datos exportados exitosamente.",)
+            messagebox.showinfo("Éxito", "Datos exportados exitosamente.", parent=parent)
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudo guardar el archivo:\n{e}")
+            messagebox.showerror("Error", f"No se pudo guardar el archivo:\n{e}", parent=parent)
 
 class BarcodeCameraReader(ctk.CTkToplevel):
     def __init__(self, on_detect_callback, camera_index=0):
@@ -190,8 +190,6 @@ class MainMenu(ctk.CTk):
         super().__init__()
         self.title("Sistema de Inventario")
         self.geometry("400x360")
-        self.hijas_abiertas = []
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         frame = ctk.CTkFrame(self)
@@ -200,6 +198,9 @@ class MainMenu(ctk.CTk):
         ctk.CTkButton(frame, text="Agregar nuevo producto", command=self.abrir_agregar_producto, width=220).pack(pady=10)
         ctk.CTkButton(frame, text="Agregar nueva importación", command=self.abrir_importacion, width=220).pack(pady=10)
         ctk.CTkButton(frame, text="Eliminar TODOS los datos", command=self.eliminar_todo_dialogo, width=220).pack(pady=10)
+
+        self.hijas_abiertas = []
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def abrir_agregar_producto(self):
         win = AgregarProducto(self)
@@ -220,13 +221,6 @@ class MainMenu(ctk.CTk):
             pass
         ventana.destroy()
 
-    def on_close(self):
-        if self.hijas_abiertas:
-            messagebox.showwarning("Atención", "Por favor, cierre primero las otras ventanas.", parent=self)
-            return
-        if messagebox.askyesno("Salir", "¿Está seguro de querer cerrar el sistema?", parent=self):
-            self.destroy()
-            
     def eliminar_todo_dialogo(self):
         password = simpledialog.askstring(
             "Eliminar todos los datos",
@@ -237,13 +231,20 @@ class MainMenu(ctk.CTk):
         if eliminar_todos_los_datos(password):
             messagebox.showinfo("Éxito", "¡Todos los datos han sido eliminados!", parent=self)
         else:
-            messagebox.showerror("Error", "Clave incorrecta. No se eliminaron los datos.",parent=self)
+            messagebox.showerror("Error", "Clave incorrecta. No se eliminaron los datos.", parent=self)
+
+    def on_close(self):
+        if self.hijas_abiertas:
+            messagebox.showwarning("Atención", "Por favor, cierre primero las otras ventanas.", parent=self)
+            return
+        if messagebox.askyesno("Salir", "¿Está seguro de querer cerrar el sistema?", parent=self):
+            self.destroy()
 
 class AgregarProducto(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
         self.title("Agregar Nuevo Producto")
-        self.geometry("490x380")
+        self.geometry("490x440")
         self.resizable(False, False)
 
         LABEL_WIDTH = 25
@@ -277,6 +278,9 @@ class AgregarProducto(ctk.CTkToplevel):
         self.btn_editar = ctk.CTkButton(form, text="Editar producto", command=self.editar_producto, width=380, fg_color="#eab308", text_color="black")
         self.btn_editar.grid(row=6, column=0, columnspan=2, pady=(0, 10), padx=8, sticky="w")
         self.btn_editar.configure(state="disabled")
+
+        ctk.CTkButton(form, text="Importar productos desde Excel", command=self.importar_desde_excel, width=380, fg_color="#0ea5e9", text_color="white")\
+            .grid(row=7, column=0, columnspan=2, pady=(12, 0), padx=8, sticky="w")
 
     def scan_barcode_camera(self):
         def on_detect(barcode):
@@ -338,6 +342,50 @@ class AgregarProducto(ctk.CTkToplevel):
         self.btn_editar.configure(state="disabled")
         self.destroy()
 
+    def importar_desde_excel(self):
+        ruta = filedialog.askopenfilename(
+            title="Selecciona archivo Excel",
+            filetypes=[("Archivos Excel", "*.xlsx")],
+            parent=self
+        )
+        if not ruta:
+            return
+        try:
+            libro = openpyxl.load_workbook(ruta)
+            hoja = libro.active
+            headers = [cell.value for cell in next(hoja.iter_rows(min_row=1, max_row=1))]
+            try:
+                idx_codebar = headers.index("codebar")
+                idx_sku = headers.index("sku")
+                idx_marca = headers.index("marca")
+                idx_producto = headers.index("producto")
+            except ValueError:
+                messagebox.showerror("Formato incorrecto", "El archivo debe tener columnas: codebar, sku, marca, producto (en la primera fila)", parent=self)
+                return
+
+            agregados = 0
+            actualizados = 0
+            for fila in hoja.iter_rows(min_row=2, values_only=True):
+                codebar = str(fila[idx_codebar]).strip() if fila[idx_codebar] else ""
+                sku = str(fila[idx_sku]).strip() if fila[idx_sku] else ""
+                marca = str(fila[idx_marca]).strip() if fila[idx_marca] else ""
+                producto = str(fila[idx_producto]).strip() if fila[idx_producto] else ""
+                if not (codebar and sku and marca and producto):
+                    continue
+                if buscar_producto_por_codebar(codebar):
+                    editar_producto(codebar, sku, marca, producto)
+                    actualizados += 1
+                else:
+                    agregar_producto(codebar, sku, marca, producto)
+                    agregados += 1
+            messagebox.showinfo(
+                "Importación finalizada",
+                f"Productos agregados: {agregados}\nProductos actualizados: {actualizados}",
+                parent=self
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo importar:\n{e}", parent=self)
+
 class InventarioApp(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
@@ -345,7 +393,7 @@ class InventarioApp(ctk.CTkToplevel):
         self.geometry("1280x800")
         self.resizable(True, True)
 
-        self.edit_rowid = None  # Guarda rowid en edición
+        self.edit_rowid = None
 
         LABEL_WIDTH = 170
         ENTRY_WIDTH = 200
@@ -495,10 +543,10 @@ class InventarioApp(ctk.CTkToplevel):
         cant_recibida = self.entry_cant_recibida.get().strip()
         cant_rechazada = self.entry_cant_rechazada.get().strip()
         if not (importacion_no and sku and marca and producto and codebar):
-            messagebox.showwarning("Campos vacíos", "Todos los campos son obligatorios.",parent=self)
+            messagebox.showwarning("Campos vacíos", "Todos los campos son obligatorios.", parent=self)
             return
         if not cant_recibida.isdigit() or not cant_rechazada.isdigit():
-            messagebox.showwarning("Datos inválidos", "Las cantidades deben ser números enteros.",parent=self)
+            messagebox.showwarning("Datos inválidos", "Las cantidades deben ser números enteros.", parent=self)
             return
         try:
             if fecha_expira:
@@ -507,7 +555,7 @@ class InventarioApp(ctk.CTkToplevel):
             else:
                 fecha_expira_formatted = ""
         except:
-            messagebox.showwarning("Fecha inválida", "La fecha de expiración debe tener formato dd/mm/aaaa.",parent=self)
+            messagebox.showwarning("Fecha inválida", "La fecha de expiración debe tener formato dd/mm/aaaa.", parent=self)
             return
         recibida = int(cant_recibida)
         rechazada = int(cant_rechazada)
@@ -520,7 +568,7 @@ class InventarioApp(ctk.CTkToplevel):
     def eliminar_seleccionado(self):
         if self.edit_rowid is None:
             return
-        if messagebox.askyesno("Confirmar", "¿Seguro que deseas eliminar esta importación?" , parent=self):
+        if messagebox.askyesno("Confirmar", "¿Seguro que deseas eliminar esta importación?", parent=self):
             eliminar_importacion_por_rowid(self.edit_rowid)
             self.cargar_importaciones()
             self.limpiar_campos()
@@ -622,7 +670,7 @@ class InventarioApp(ctk.CTkToplevel):
 
     def exportar_excel(self):
         filas = [self.tree.item(x)["values"] for x in self.tree.get_children()]
-        exportar_importaciones_excel(filas)
+        exportar_importaciones_excel(filas, parent=self)
 
     def limpiar_tabla(self):
         for x in self.tree.get_children():
